@@ -1,4 +1,4 @@
-package main // <-- THIS MUST BE THE FIRST LINE
+package main
 
 import (
 	"encoding/json"
@@ -12,14 +12,15 @@ import (
 
 // --- 1. Data Structure ---
 
-// Request represents a single user gig request.
+// Request represents a single user gig request, now including the supplier's email for filtering.
 type Request struct {
-	ID        int       `json:"id"`
-	GigTitle  string    `json:"gig_title"`
-	Client    string    `json:"client"`
-	Email     string    `json:"email"`
-	Details   string    `json:"details"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            int       `json:"id"`
+	GigTitle      string    `json:"gig_title"`
+	Client        string    `json:"client"`
+	ClientEmail   string    `json:"client_email"` // The client's email for contact
+	SupplierEmail string    `json:"supplier_email"` // The supplier/user who owns this request
+	Details       string    `json:"details"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // --- 2. Global State Management ---
@@ -45,16 +46,34 @@ func RequestsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// listRequests returns all stored gig requests.
+// listRequests returns all stored gig requests, optionally filtered by supplier_email query param.
 func listRequests(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	// 1. Get the supplier_email from the query parameters
+	query := r.URL.Query()
+	supplierEmailFilter := query.Get("supplier_email")
 
 	// Lock the data before reading to ensure thread safety
 	mu.Lock()
 	defer mu.Unlock()
 
-	if err := json.NewEncoder(w).Encode(requests); err != nil {
+	var filteredRequests []Request
+
+	// 2. Filter the requests slice if a supplier_email is provided
+	if supplierEmailFilter != "" {
+		for _, req := range requests {
+			if req.SupplierEmail == supplierEmailFilter {
+				filteredRequests = append(filteredRequests, req)
+			}
+		}
+	} else {
+		// 3. If no filter is provided, return all requests (e.g., for an admin view)
+		filteredRequests = requests
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(filteredRequests); err != nil {
 		log.Printf("Error encoding response: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
@@ -69,9 +88,9 @@ func createRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Basic Validation
-	if newRequest.GigTitle == "" || newRequest.Client == "" || newRequest.Email == "" {
-		http.Error(w, "Missing required fields (gig_title, client, email)", http.StatusBadRequest)
+	// Basic Validation - require all core fields including the new supplier_email
+	if newRequest.GigTitle == "" || newRequest.Client == "" || newRequest.ClientEmail == "" || newRequest.SupplierEmail == "" {
+		http.Error(w, "Missing required fields (gig_title, client, client_email, supplier_email)", http.StatusBadRequest)
 		return
 	}
 
@@ -83,7 +102,7 @@ func createRequest(w http.ResponseWriter, r *http.Request) {
 	nextID++
 	mu.Unlock()
 
-	log.Printf("New request created: ID %d, Title: %s", newRequest.ID, newRequest.GigTitle)
+	log.Printf("New request created: ID %d, Title: %s, Supplier: %s", newRequest.ID, newRequest.GigTitle, newRequest.SupplierEmail)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
